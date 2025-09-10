@@ -1,0 +1,23 @@
+[package]
+name = "winio-webview2"
+version = "0.1.0"
+edition = "2021"
+description = "WebView2 Win32 bindings for Rust"
+categories = ["os::windows-apis", "gui"]
+keywords = ["webview2", "gui"]
+authors = ["Berrysoft <Strawberry_Str@hotmail.com>"]
+license = "MIT"
+repository = "https://github.com/compio-rs/webview2-rs"
+
+[lib]
+name = "webview2"
+
+[dependencies]
+windows-core = { workspace = true }
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
+    "Win32_UI_WindowsAndMessaging",
+] }

@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = ["bindgen", "webview2"]
+default-members = ["webview2"]
+
+[workspace.dependencies]
+windows = "0.62.0"
+windows-bindgen = "0.63.0"
+windows-core = "0.62.0"
+webview2 = { path = "webview2", package = "winio-webview2" }

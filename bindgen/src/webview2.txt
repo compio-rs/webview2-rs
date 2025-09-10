@@ -1,0 +1,14 @@
+--in
+    default
+    winmdgen/bin/Microsoft.Web.WebView2.winmd
+
+--no-deps
+--reference
+    windows,skip-root,Windows
+
+--out webview2/src/bindings.rs
+--implement
+--flat
+
+--filter
+    Microsoft.Web.WebView2.Win32

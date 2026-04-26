@@ -84,11 +84,16 @@ pub fn create_env_impl(
     )
 }
 
-fn ptr_to_pathbuf(ptr: PCWSTR) -> Option<PathBuf> {
-    if ptr.is_null() {
-        None
-    } else {
-        Some(PathBuf::from(OsString::from_wide(unsafe { ptr.as_wide() })))
+fn ptr_to_pathbuf(ptr: CowPCWSTR) -> Option<PathBuf> {
+    match ptr {
+        CowPCWSTR::Pointer(ptr) => {
+            if ptr.is_null() {
+                None
+            } else {
+                Some(PathBuf::from(OsString::from_wide(unsafe { ptr.as_wide() })))
+            }
+        }
+        CowPCWSTR::Owned(s) => Some(PathBuf::from(s.to_os_string())),
     }
 }
 
@@ -239,7 +244,7 @@ fn create_env_with_client_dll(
     path: HSTRING,
     unknown: bool,
     runtime_type: WebView2RunTimeType,
-    user_data_folder: PCWSTR,
+    user_data_folder: CowPCWSTR,
     options: Option<&ICoreWebView2EnvironmentOptions>,
     handler: &ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler,
 ) -> Result<()> {
@@ -262,7 +267,7 @@ fn create_env_with_client_dll(
         let hr = create_proc(
             unknown,
             runtime_type,
-            user_data_folder,
+            user_data_folder.as_ptr(),
             options.param().abi(),
             Some(handler).param().abi(),
         );

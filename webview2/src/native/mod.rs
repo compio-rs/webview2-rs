@@ -1,11 +1,12 @@
 #![allow(non_snake_case, clippy::missing_safety_doc)]
 
 use windows::Win32::Foundation::E_POINTER;
-use windows_core::{Error, PCWSTR, Param, Ref, Result};
+use windows_core::{Error, HSTRING, PCWSTR, Param, Ref, Result};
 
 use crate::*;
 
 mod load;
+mod r#override;
 
 #[inline]
 pub unsafe fn CreateCoreWebView2Environment<P0>(handler: P0) -> Result<()>
@@ -36,22 +37,48 @@ where
         };
 
         let options = options.param();
-        let params = WebView2EnvironmentParams {
-            embedded_edge_sub_folder: browser_executable_folder.param().abi(),
-            user_data_dir: user_data_folder.param().abi(),
+        let mut params = WebView2EnvironmentParams {
+            embedded_edge_sub_folder: browser_executable_folder.param().abi().into(),
+            user_data_dir: user_data_folder.param().abi().into(),
             environment_options: options.borrow(),
             release_channel_preference: WebView2ReleaseChannelPreference::Stable,
         };
-        // TODO: UpdateWebViewEnvironmentParamsWithOverrideValues
+        r#override::update(&mut params);
         load::create_env_impl(params, handler)
     }
 }
 
 struct WebView2EnvironmentParams<'a> {
-    embedded_edge_sub_folder: PCWSTR,
-    user_data_dir: PCWSTR,
+    embedded_edge_sub_folder: CowPCWSTR,
+    user_data_dir: CowPCWSTR,
     environment_options: Ref<'a, ICoreWebView2EnvironmentOptions>,
     release_channel_preference: WebView2ReleaseChannelPreference,
+}
+
+enum CowPCWSTR {
+    Pointer(PCWSTR),
+    Owned(HSTRING),
+}
+
+impl CowPCWSTR {
+    pub fn as_ptr(&self) -> PCWSTR {
+        match self {
+            CowPCWSTR::Pointer(ptr) => *ptr,
+            CowPCWSTR::Owned(s) => PCWSTR(s.as_ptr()),
+        }
+    }
+}
+
+impl From<PCWSTR> for CowPCWSTR {
+    fn from(value: PCWSTR) -> Self {
+        Self::Pointer(value)
+    }
+}
+
+impl From<HSTRING> for CowPCWSTR {
+    fn from(value: HSTRING) -> Self {
+        Self::Owned(value)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -59,8 +86,3 @@ enum WebView2ReleaseChannelPreference {
     Stable = 0,
     Canary = 1,
 }
-
-const REDIST_OVERRIDE_KEY: &str = "Software\\Policies\\Microsoft\\Edge\\WebView2\\";
-
-const EMBEDDED_OVERRIDE_KEY: &str =
-    "Software\\Policies\\Microsoft\\EmbeddedBrowserWebView\\LoaderOverride\\";

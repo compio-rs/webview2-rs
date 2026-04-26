@@ -1,6 +1,10 @@
 #![allow(non_snake_case, clippy::missing_safety_doc)]
 
-use windows_core::{HSTRING, PCWSTR, Param, Ref, Result};
+use windows::Win32::{
+    Foundation::{E_INVALIDARG, E_POINTER},
+    System::Com::CoTaskMemAlloc,
+};
+use windows_core::{Error, HSTRING, PCWSTR, PWSTR, Param, Result};
 
 use crate::*;
 
@@ -34,10 +38,11 @@ where
         let handler = handler.ok()?;
 
         let options = options.param();
+        let options = options.borrow();
         let mut params = WebView2EnvironmentParams {
             embedded_edge_sub_folder: browser_executable_folder.param().abi().into(),
             user_data_dir: user_data_folder.param().abi().into(),
-            environment_options: options.borrow(),
+            environment_options: options.as_ref(),
             release_channel_preference: WebView2ReleaseChannelPreference::Stable,
         };
         r#override::update(&mut params);
@@ -48,7 +53,7 @@ where
 struct WebView2EnvironmentParams<'a> {
     embedded_edge_sub_folder: CowPCWSTR,
     user_data_dir: CowPCWSTR,
-    environment_options: Ref<'a, ICoreWebView2EnvironmentOptions>,
+    environment_options: Option<&'a ICoreWebView2EnvironmentOptions>,
     release_channel_preference: WebView2ReleaseChannelPreference,
 }
 
@@ -82,4 +87,72 @@ impl From<HSTRING> for CowPCWSTR {
 enum WebView2ReleaseChannelPreference {
     Stable = 0,
     Canary = 1,
+}
+
+#[inline]
+pub unsafe fn GetAvailableCoreWebView2BrowserVersionString<P0>(
+    browser_executable_folder: P0,
+    version_info: *mut PWSTR,
+) -> Result<()>
+where
+    P0: Param<PCWSTR>,
+{
+    if version_info.is_null() || !version_info.is_aligned() {
+        return Err(Error::from_hresult(E_POINTER));
+    }
+
+    unsafe {
+        let mut params = WebView2EnvironmentParams {
+            embedded_edge_sub_folder: browser_executable_folder.param().abi().into(),
+            user_data_dir: CowPCWSTR::Pointer(PCWSTR::null()),
+            environment_options: None,
+            release_channel_preference: WebView2ReleaseChannelPreference::Stable,
+        };
+        r#override::update(&mut params);
+        let s = load::get_version_string(params)?;
+        let byte_len = s.len() * 2 + 2;
+        let mem = CoTaskMemAlloc(byte_len).cast::<u16>();
+        if !mem.is_null() {
+            mem.copy_from_nonoverlapping(s.as_ptr(), s.len() + 1);
+        }
+        *version_info = PWSTR(mem);
+        Ok(())
+    }
+}
+
+#[inline]
+pub unsafe fn CompareBrowserVersions<P0, P1>(
+    version1: P0,
+    version2: P1,
+    result: *mut i32,
+) -> Result<()>
+where
+    P0: Param<PCWSTR>,
+    P1: Param<PCWSTR>,
+{
+    if result.is_null() || !result.is_aligned() {
+        return Err(Error::from_hresult(E_POINTER));
+    }
+
+    unsafe {
+        let version1 = version1.param().abi();
+        let version2 = version2.param().abi();
+
+        if version1.is_null() || version2.is_null() {
+            return Err(Error::from_hresult(E_INVALIDARG));
+        }
+
+        let v1 = version1.to_string()?;
+        let v1 = load::parse_version(&v1).ok_or_else(|| Error::from_hresult(E_INVALIDARG))?;
+        let v2 = version2.to_string()?;
+        let v2 = load::parse_version(&v2).ok_or_else(|| Error::from_hresult(E_INVALIDARG))?;
+
+        *result = match v1.cmp(&v2) {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        };
+    }
+
+    Ok(())
 }

@@ -3,17 +3,21 @@ use std::{
     ffi::{OsString, c_void},
     os::windows::ffi::OsStringExt,
     path::{Component, Path, PathBuf, Prefix},
+    ptr::null_mut,
 };
 
 use super::*;
 use windows::Win32::{
     Foundation::{E_FAIL, ERROR_FILE_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER, FARPROC, FreeLibrary},
     Security::PSID,
-    Storage::Packaging::Appx::{
-        AddPackageDependency, AddPackageDependencyOptions_None,
-        CreatePackageDependencyOptions_None, GetCurrentPackageInfo, PACKAGE_INFO, PACKAGE_VERSION,
-        PACKAGEDEPENDENCY_CONTEXT, PackageDependencyLifetimeKind_Process,
-        PackageDependencyProcessorArchitectures_None, TryCreatePackageDependency,
+    Storage::{
+        FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW},
+        Packaging::Appx::{
+            AddPackageDependency, AddPackageDependencyOptions_None,
+            CreatePackageDependencyOptions_None, GetCurrentPackageInfo, PACKAGE_INFO,
+            PACKAGE_VERSION, PACKAGEDEPENDENCY_CONTEXT, PackageDependencyLifetimeKind_Process,
+            PackageDependencyProcessorArchitectures_None, TryCreatePackageDependency,
+        },
     },
     System::{
         LibraryLoader::{GetProcAddress, LoadLibraryW},
@@ -31,6 +35,8 @@ enum WebView2RunTimeType {
 }
 
 const NUM_CHANNELS: usize = 5;
+
+const CHANNEL_NAME: [&str; NUM_CHANNELS] = ["", "beta", "dev", "canary", "internal"];
 
 const CHANNEL_UUID: [&str; NUM_CHANNELS] = [
     "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
@@ -70,7 +76,7 @@ pub fn create_env_impl(
         let path = find_embedded_client_dll(sub_folder)?;
         (WebView2RunTimeType::Redistributable, path)
     } else {
-        let path = find_installed_client_dll(params.release_channel_preference)?;
+        let (path, ..) = find_installed_client_dll(params.release_channel_preference)?;
         (WebView2RunTimeType::Installed, path)
     };
     let path = HSTRING::from(path.into_os_string());
@@ -79,7 +85,7 @@ pub fn create_env_impl(
         true,
         runtime_type,
         params.user_data_dir,
-        params.environment_options.as_ref(),
+        params.environment_options,
         handler,
     )
 }
@@ -97,7 +103,9 @@ fn ptr_to_pathbuf(ptr: CowPCWSTR) -> Option<PathBuf> {
     }
 }
 
-fn find_installed_client_dll(preference: WebView2ReleaseChannelPreference) -> Result<PathBuf> {
+fn find_installed_client_dll(
+    preference: WebView2ReleaseChannelPreference,
+) -> Result<(PathBuf, String, &'static str)> {
     for i in 0..NUM_CHANNELS {
         let channel = if preference == WebView2ReleaseChannelPreference::Canary {
             4 - i
@@ -105,11 +113,11 @@ fn find_installed_client_dll(preference: WebView2ReleaseChannelPreference) -> Re
             i
         };
         let sub_key = format!("{}{}", INSTALL_KEY_PATH, CHANNEL_UUID[channel]);
-        if let Some(path) = find_installed_client_dll_for_channel(&sub_key, false) {
-            return Ok(path);
+        if let Some((path, version)) = find_installed_client_dll_for_channel(&sub_key, false) {
+            return Ok((path, version, CHANNEL_NAME[channel]));
         }
-        if let Some(path) = find_installed_client_dll_for_channel(&sub_key, true) {
-            return Ok(path);
+        if let Some((path, version)) = find_installed_client_dll_for_channel(&sub_key, true) {
+            return Ok((path, version, CHANNEL_NAME[channel]));
         }
 
         struct DepId(PWSTR);
@@ -187,13 +195,17 @@ fn find_installed_client_dll(preference: WebView2ReleaseChannelPreference) -> Re
         };
         let path = PathBuf::from(path.to_os_string());
         if let Some(path) = check_version_and_find_dll(version, path) {
-            return Ok(path);
+            let version = format!(
+                "{}.{}.{}.{}",
+                version[0], version[1], version[2], version[3]
+            );
+            return Ok((path, version, CHANNEL_NAME[channel]));
         }
     }
     Err(ERROR_FILE_NOT_FOUND.into())
 }
 
-fn find_installed_client_dll_for_channel(sub_key: &str, system: bool) -> Option<PathBuf> {
+fn find_installed_client_dll_for_channel(sub_key: &str, system: bool) -> Option<(PathBuf, String)> {
     let key = if system {
         windows_registry::LOCAL_MACHINE
     } else {
@@ -206,11 +218,13 @@ fn find_installed_client_dll_for_channel(sub_key: &str, system: bool) -> Option<
     .ok()?;
     let path = key.get_hstring("EBWebView").ok()?;
     let path = PathBuf::from(path.to_os_string());
-    let version = parse_version(path.file_name()?.to_str()?)?;
-    check_version_and_find_dll(version, path)
+    let version_str = path.file_name()?.to_string_lossy().into_owned();
+    let version = parse_version(&version_str)?;
+    let path = check_version_and_find_dll(version, path)?;
+    Some((path, version_str))
 }
 
-fn parse_version(s: &str) -> Option<[u16; 4]> {
+pub fn parse_version(s: &str) -> Option<[u16; 4]> {
     let mut parts = s.split('.').map(str::parse::<u16>);
     Some([
         parts.next()?.ok()?,
@@ -316,5 +330,57 @@ fn find_client_dll_in_folder(folder: PathBuf) -> Result<PathBuf> {
         Ok(path)
     } else {
         Err(ERROR_FILE_NOT_FOUND.into())
+    }
+}
+
+pub fn get_version_string(params: WebView2EnvironmentParams) -> Result<HSTRING> {
+    if let Some(sub_folder) = ptr_to_pathbuf(params.embedded_edge_sub_folder)
+        && !sub_folder.as_os_str().is_empty()
+    {
+        let path = find_embedded_client_dll(sub_folder)?;
+        find_embedded_version(&path)
+    } else {
+        let (_, mut version, channel) =
+            find_installed_client_dll(params.release_channel_preference)?;
+        if !channel.is_empty() {
+            version = format!("{} {}", version, channel);
+        }
+        Ok(version.into())
+    }
+}
+
+fn find_embedded_version(path: &Path) -> Result<HSTRING> {
+    let path = HSTRING::from(path.to_path_buf().into_os_string());
+    let mut handle = 0;
+    let verinfo = unsafe { GetFileVersionInfoSizeW(PCWSTR(path.as_ptr()), Some(&mut handle)) };
+    if verinfo == 0 {
+        return Err(Error::from_thread());
+    }
+
+    let mut buffer = vec![0u8; verinfo as usize];
+    unsafe {
+        GetFileVersionInfoW(
+            PCWSTR(path.as_ptr()),
+            Some(handle),
+            verinfo,
+            buffer.as_mut_ptr().cast(),
+        )?
+    };
+    let mut lpbuffer = null_mut();
+    let mut pulen = 0;
+    unsafe {
+        VerQueryValueW(
+            buffer.as_ptr().cast(),
+            windows_core::w!("\\StringFileInfo\\040904B0\\ProductVersion"),
+            &mut lpbuffer,
+            &mut pulen,
+        )
+        .ok()?
+    };
+    unsafe {
+        Ok(HSTRING::from_wide(std::slice::from_raw_parts(
+            lpbuffer.cast(),
+            pulen as usize,
+        )))
     }
 }

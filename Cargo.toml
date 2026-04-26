@@ -7,4 +7,5 @@ default-members = ["webview2"]
 windows = "0.62.0"
 windows-bindgen = "0.66.0"
 windows-core = "0.62.0"
+windows-registry = "0.6.1"
 webview2 = { path = "webview2", package = "winio-webview2" }

@@ -1,7 +1,6 @@
 #![allow(non_snake_case, clippy::missing_safety_doc)]
 
-use windows::Win32::Foundation::E_POINTER;
-use windows_core::{Error, HSTRING, PCWSTR, Param, Ref, Result};
+use windows_core::{HSTRING, PCWSTR, Param, Ref, Result};
 
 use crate::*;
 
@@ -32,9 +31,7 @@ where
     unsafe {
         let handler = handler.param();
         let handler = handler.borrow();
-        let Some(handler) = handler.as_ref() else {
-            return Err(Error::from_hresult(E_POINTER));
-        };
+        let handler = handler.ok()?;
 
         let options = options.param();
         let mut params = WebView2EnvironmentParams {

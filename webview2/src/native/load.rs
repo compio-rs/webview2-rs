@@ -1,6 +1,7 @@
 use std::{
     env::current_exe,
-    ffi::c_void,
+    ffi::{OsString, c_void},
+    os::windows::ffi::OsStringExt,
     path::{Component, Path, PathBuf, Prefix},
 };
 
@@ -27,12 +28,6 @@ use windows_core::{Error, HRESULT, HSTRING, PCWSTR, PWSTR, Param, Result};
 enum WebView2RunTimeType {
     Installed = 0,
     Redistributable = 1,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum WebView2ReleaseChannelPreference {
-    Stable,
-    Canary,
 }
 
 const NUM_CHANNELS: usize = 5;
@@ -68,8 +63,10 @@ pub fn create_env_impl(
     params: WebView2EnvironmentParams,
     handler: &ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler,
 ) -> Result<()> {
-    let (runtime_type, path) = if !params.embedded_edge_sub_folder.is_empty() {
-        let sub_folder = PathBuf::from(params.embedded_edge_sub_folder.to_os_string());
+    let (runtime_type, path) = if let Some(sub_folder) =
+        ptr_to_pathbuf(params.embedded_edge_sub_folder)
+        && !sub_folder.as_os_str().is_empty()
+    {
         let path = find_embedded_client_dll(sub_folder)?;
         (WebView2RunTimeType::Redistributable, path)
     } else {
@@ -85,6 +82,14 @@ pub fn create_env_impl(
         params.environment_options.as_ref(),
         handler,
     )
+}
+
+fn ptr_to_pathbuf(ptr: PCWSTR) -> Option<PathBuf> {
+    if ptr.is_null() {
+        None
+    } else {
+        Some(PathBuf::from(OsString::from_wide(unsafe { ptr.as_wide() })))
+    }
 }
 
 fn find_installed_client_dll(preference: WebView2ReleaseChannelPreference) -> Result<PathBuf> {
@@ -234,7 +239,7 @@ fn create_env_with_client_dll(
     path: HSTRING,
     unknown: bool,
     runtime_type: WebView2RunTimeType,
-    user_data_folder: HSTRING,
+    user_data_folder: PCWSTR,
     options: Option<&ICoreWebView2EnvironmentOptions>,
     handler: &ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler,
 ) -> Result<()> {
@@ -257,7 +262,7 @@ fn create_env_with_client_dll(
         let hr = create_proc(
             unknown,
             runtime_type,
-            Param::<PCWSTR>::param(&user_data_folder).abi(),
+            user_data_folder,
             options.param().abi(),
             Some(handler).param().abi(),
         );

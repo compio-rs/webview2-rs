@@ -1,7 +1,7 @@
 #![allow(non_snake_case, clippy::missing_safety_doc)]
 
 use windows::Win32::Foundation::E_POINTER;
-use windows_core::{Error, HSTRING, PCWSTR, Param, Result};
+use windows_core::{Error, PCWSTR, Param, Ref, Result};
 
 use crate::*;
 
@@ -35,30 +35,29 @@ where
             return Err(Error::from_hresult(E_POINTER));
         };
 
+        let options = options.param();
         let params = WebView2EnvironmentParams {
-            embedded_edge_sub_folder: safe_to_hstring(browser_executable_folder.param().abi()),
-            user_data_dir: safe_to_hstring(user_data_folder.param().abi()),
-            environment_options: options.param().borrow().cloned(),
-            release_channel_preference: load::WebView2ReleaseChannelPreference::Stable,
+            embedded_edge_sub_folder: browser_executable_folder.param().abi(),
+            user_data_dir: user_data_folder.param().abi(),
+            environment_options: options.borrow(),
+            release_channel_preference: WebView2ReleaseChannelPreference::Stable,
         };
         // TODO: UpdateWebViewEnvironmentParamsWithOverrideValues
         load::create_env_impl(params, handler)
     }
 }
 
-fn safe_to_hstring(s: PCWSTR) -> HSTRING {
-    if s.is_null() {
-        HSTRING::new()
-    } else {
-        unsafe { s.to_hstring() }
-    }
+struct WebView2EnvironmentParams<'a> {
+    embedded_edge_sub_folder: PCWSTR,
+    user_data_dir: PCWSTR,
+    environment_options: Ref<'a, ICoreWebView2EnvironmentOptions>,
+    release_channel_preference: WebView2ReleaseChannelPreference,
 }
 
-struct WebView2EnvironmentParams {
-    embedded_edge_sub_folder: HSTRING,
-    user_data_dir: HSTRING,
-    environment_options: Option<ICoreWebView2EnvironmentOptions>,
-    release_channel_preference: load::WebView2ReleaseChannelPreference,
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WebView2ReleaseChannelPreference {
+    Stable = 0,
+    Canary = 1,
 }
 
 const REDIST_OVERRIDE_KEY: &str = "Software\\Policies\\Microsoft\\Edge\\WebView2\\";

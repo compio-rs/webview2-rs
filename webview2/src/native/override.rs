@@ -4,7 +4,7 @@ use windows::Win32::{
     Foundation::ERROR_INSUFFICIENT_BUFFER,
     Storage::Packaging::Appx::GetCurrentApplicationUserModelId, System::Registry::KEY_QUERY_VALUE,
 };
-use windows_core::PWSTR;
+use windows_core::{HStringBuilder, PWSTR};
 use windows_registry::{CURRENT_USER, Key, LOCAL_MACHINE, Type};
 
 use super::*;
@@ -72,7 +72,7 @@ fn get_param_reg(
 ) -> Option<RegistryValue> {
     let current = current_exe().unwrap_or_default();
     let exe_name = current.file_name().unwrap_or_default().to_string_lossy();
-    let id = app_user_mode_id().unwrap_or_default().to_string_lossy();
+    let id = app_user_model_id().unwrap_or_default().to_string_lossy();
 
     if check_key_override
         && redist
@@ -117,19 +117,16 @@ fn read_override(key: &str, root: &Key, value: &str, redist: bool) -> Option<Reg
     }
 }
 
-fn app_user_mode_id() -> Option<HSTRING> {
-    let mut buffer = vec![0u16; 0x100];
-    let mut len = buffer.len() as u32;
-    let mut res =
-        unsafe { GetCurrentApplicationUserModelId(&mut len, Some(PWSTR(buffer.as_mut_ptr()))) };
+fn app_user_model_id() -> Option<HSTRING> {
+    let mut len = 0;
+    let res = unsafe { GetCurrentApplicationUserModelId(&mut len, None) };
     if res == ERROR_INSUFFICIENT_BUFFER {
-        buffer.resize(len as usize, 0);
-        res =
-            unsafe { GetCurrentApplicationUserModelId(&mut len, Some(PWSTR(buffer.as_mut_ptr()))) };
+        let mut buffer = HStringBuilder::new(len as usize);
+        unsafe { GetCurrentApplicationUserModelId(&mut len, Some(PWSTR(buffer.as_mut_ptr()))) }
+            .ok()
+            .ok()?;
+        buffer.trim_end();
+        return Some(buffer.into());
     }
-    if res.is_err() {
-        return None;
-    }
-    buffer.truncate(len as usize);
-    Some(HSTRING::from_wide(&buffer))
+    None
 }

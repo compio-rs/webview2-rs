@@ -25,7 +25,7 @@ use windows::Win32::{
         Registry::KEY_WOW64_32KEY,
     },
 };
-use windows_core::{Error, HRESULT, HSTRING, PCWSTR, PWSTR, Param, Result};
+use windows_core::{Error, HRESULT, HSTRING, PCWSTR, PWSTR, Param, Result, h, s, w};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
@@ -47,11 +47,11 @@ const CHANNEL_UUID: [&str; NUM_CHANNELS] = [
 ];
 
 const CHANNEL_PACKAGE_NAME: [&HSTRING; NUM_CHANNELS] = [
-    windows_core::h!("Microsoft.WebView2Runtime.Stable_8wekyb3d8bbwe"),
-    windows_core::h!("Microsoft.WebView2Runtime.Beta_8wekyb3d8bbwe"),
-    windows_core::h!("Microsoft.WebView2Runtime.Dev_8wekyb3d8bbwe"),
-    windows_core::h!("Microsoft.WebView2Runtime.Canary_8wekyb3d8bbwe"),
-    windows_core::h!("Microsoft.WebView2Runtime.Internal_8wekyb3d8bbwe"),
+    h!("Microsoft.WebView2Runtime.Stable_8wekyb3d8bbwe"),
+    h!("Microsoft.WebView2Runtime.Beta_8wekyb3d8bbwe"),
+    h!("Microsoft.WebView2Runtime.Dev_8wekyb3d8bbwe"),
+    h!("Microsoft.WebView2Runtime.Canary_8wekyb3d8bbwe"),
+    h!("Microsoft.WebView2Runtime.Internal_8wekyb3d8bbwe"),
 ];
 
 const INSTALL_KEY_PATH: &str = "Software\\Microsoft\\EdgeUpdate\\ClientState\\";
@@ -140,19 +140,19 @@ fn create_env_with_client_dll(
     handler: &ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler,
 ) -> Result<()> {
     unsafe {
-        let client_dll = LoadLibraryW(PCWSTR(path.as_ptr()))?;
+        let client_dll = LoadLibraryW(&path)?;
         let Some(create_proc) = std::mem::transmute::<
             FARPROC,
             CreateWebViewEnvironmentWithOptionsInternalFn,
         >(GetProcAddress(
             client_dll,
-            windows_core::s!("CreateWebViewEnvironmentWithOptionsInternal"),
+            s!("CreateWebViewEnvironmentWithOptionsInternal"),
         )) else {
             return Err(Error::from_thread());
         };
         let can_unload_proc = std::mem::transmute::<FARPROC, DllCanUnloadNowFn>(GetProcAddress(
             client_dll,
-            windows_core::s!("DllCanUnloadNow"),
+            s!("DllCanUnloadNow"),
         ));
 
         let hr = create_proc(
@@ -341,26 +341,19 @@ fn find_client_dll_in_folder(folder: PathBuf) -> Result<PathBuf> {
 fn find_embedded_version(path: &Path) -> Result<HSTRING> {
     let path = HSTRING::from(path.to_path_buf().into_os_string());
     let mut handle = 0;
-    let verinfo = unsafe { GetFileVersionInfoSizeW(PCWSTR(path.as_ptr()), Some(&mut handle)) };
+    let verinfo = unsafe { GetFileVersionInfoSizeW(&path, Some(&mut handle)) };
     if verinfo == 0 {
         return Err(Error::from_thread());
     }
 
     let mut buffer = vec![0u8; verinfo as usize];
-    unsafe {
-        GetFileVersionInfoW(
-            PCWSTR(path.as_ptr()),
-            Some(handle),
-            verinfo,
-            buffer.as_mut_ptr().cast(),
-        )?
-    };
+    unsafe { GetFileVersionInfoW(&path, Some(handle), verinfo, buffer.as_mut_ptr().cast())? };
     let mut lpbuffer = null_mut();
     let mut pulen = 0;
     unsafe {
         VerQueryValueW(
             buffer.as_ptr().cast(),
-            windows_core::w!("\\StringFileInfo\\040904B0\\ProductVersion"),
+            w!("\\StringFileInfo\\040904B0\\ProductVersion"),
             &mut lpbuffer,
             &mut pulen,
         )

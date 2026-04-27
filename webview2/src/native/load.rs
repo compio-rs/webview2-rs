@@ -54,17 +54,6 @@ const CHANNEL_PACKAGE_NAME: [&HSTRING; NUM_CHANNELS] = [
     h!("Microsoft.WebView2Runtime.Internal_8wekyb3d8bbwe"),
 ];
 
-const INSTALL_KEY_PATH: &str = "Software\\Microsoft\\EdgeUpdate\\ClientState\\";
-
-const MIN_COMPATIBLE_VER: [u16; 4] = [86, 0, 616, 0];
-
-#[cfg(target_arch = "x86_64")]
-const EMBEDDED_WEBVIEW_PATH: &str = "EBWebView\\x64\\EmbeddedBrowserWebView.dll";
-#[cfg(target_arch = "x86")]
-const EMBEDDED_WEBVIEW_PATH: &str = "EBWebView\\x86\\EmbeddedBrowserWebView.dll";
-#[cfg(target_arch = "aarch64")]
-const EMBEDDED_WEBVIEW_PATH: &str = "EBWebView\\arm64\\EmbeddedBrowserWebView.dll";
-
 fn ptr_to_pathbuf(ptr: CowPCWSTR) -> Option<PathBuf> {
     match ptr {
         CowPCWSTR::Pointer(ptr) => {
@@ -182,7 +171,11 @@ fn find_installed_client_dll(
         } else {
             i
         };
-        let sub_key = format!("{}{}", INSTALL_KEY_PATH, CHANNEL_UUID[channel]);
+
+        let sub_key = format!(
+            "Software\\Microsoft\\EdgeUpdate\\ClientState\\{}",
+            CHANNEL_UUID[channel]
+        );
         if let Some((path, version)) = find_installed_client_dll_for_channel(&sub_key, false) {
             return Ok((path, version, CHANNEL_NAME[channel]));
         }
@@ -310,6 +303,8 @@ pub fn parse_version(s: &str) -> Option<[u16; 4]> {
 }
 
 fn check_version_and_find_dll(version: [u16; 4], path: PathBuf) -> Option<PathBuf> {
+    const MIN_COMPATIBLE_VER: [u16; 4] = [86, 0, 616, 0];
+
     if version >= MIN_COMPATIBLE_VER {
         find_client_dll_in_folder(path).ok()
     } else {
@@ -330,6 +325,13 @@ fn find_embedded_client_dll(sub_folder: PathBuf) -> Result<PathBuf> {
 }
 
 fn find_client_dll_in_folder(folder: PathBuf) -> Result<PathBuf> {
+    #[cfg(target_arch = "x86_64")]
+    const EMBEDDED_WEBVIEW_PATH: &str = "EBWebView\\x64\\EmbeddedBrowserWebView.dll";
+    #[cfg(target_arch = "x86")]
+    const EMBEDDED_WEBVIEW_PATH: &str = "EBWebView\\x86\\EmbeddedBrowserWebView.dll";
+    #[cfg(target_arch = "aarch64")]
+    const EMBEDDED_WEBVIEW_PATH: &str = "EBWebView\\arm64\\EmbeddedBrowserWebView.dll";
+
     let path = folder.join(EMBEDDED_WEBVIEW_PATH);
     if path.exists() {
         Ok(path)

@@ -1,3 +1,7 @@
+//! https://github.com/jchv/OpenWebView2Loader
+//!
+//! A reimplementation of WebView2Loader in pure Rust.
+
 #![allow(non_snake_case, clippy::missing_safety_doc)]
 
 use windows::Win32::{

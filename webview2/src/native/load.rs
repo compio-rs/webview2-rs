@@ -2,7 +2,7 @@ use std::{
     env::current_exe,
     ffi::{OsString, c_void},
     os::windows::ffi::OsStringExt,
-    path::{Component, Path, PathBuf, Prefix},
+    path::{Path, PathBuf},
     ptr::null_mut,
 };
 
@@ -297,31 +297,15 @@ fn create_env_with_client_dll(
 }
 
 fn find_embedded_client_dll(sub_folder: PathBuf) -> Result<PathBuf> {
-    let prefix = path_prefix(&sub_folder);
-    if sub_folder.is_absolute()
-        && prefix
-            .map(|p| matches!(p, Prefix::Disk(_) | Prefix::VerbatimDisk(_)))
-            .unwrap_or_default()
-    {
-        return find_client_dll_in_folder(sub_folder);
-    }
-
-    if sub_folder.is_relative() {
-        let path = current_exe()?
+    let path = if sub_folder.is_absolute() {
+        sub_folder
+    } else {
+        current_exe()?
             .parent()
             .ok_or_else(|| Error::from_hresult(E_FAIL))?
-            .join(sub_folder);
-        return find_client_dll_in_folder(path);
-    }
-
-    find_client_dll_in_folder(sub_folder)
-}
-
-fn path_prefix(path: &Path) -> Option<Prefix<'_>> {
-    match path.components().next()? {
-        Component::Prefix(prefix) => Some(prefix.kind()),
-        _ => None,
-    }
+            .join(sub_folder)
+    };
+    find_client_dll_in_folder(path)
 }
 
 fn find_client_dll_in_folder(folder: PathBuf) -> Result<PathBuf> {

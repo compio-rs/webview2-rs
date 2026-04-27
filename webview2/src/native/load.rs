@@ -65,6 +65,35 @@ const EMBEDDED_WEBVIEW_PATH: &str = "EBWebView\\x86\\EmbeddedBrowserWebView.dll"
 #[cfg(target_arch = "aarch64")]
 const EMBEDDED_WEBVIEW_PATH: &str = "EBWebView\\arm64\\EmbeddedBrowserWebView.dll";
 
+fn ptr_to_pathbuf(ptr: CowPCWSTR) -> Option<PathBuf> {
+    match ptr {
+        CowPCWSTR::Pointer(ptr) => {
+            if ptr.is_null() {
+                None
+            } else {
+                Some(PathBuf::from(OsString::from_wide(unsafe { ptr.as_wide() })))
+            }
+        }
+        CowPCWSTR::Owned(s) => Some(PathBuf::from(s.to_os_string())),
+    }
+}
+
+pub fn get_version_string(params: WebView2EnvironmentParams) -> Result<HSTRING> {
+    if let Some(sub_folder) = ptr_to_pathbuf(params.embedded_edge_sub_folder)
+        && !sub_folder.as_os_str().is_empty()
+    {
+        let path = find_embedded_client_dll(sub_folder)?;
+        find_embedded_version(&path)
+    } else {
+        let (_, mut version, channel) =
+            find_installed_client_dll(params.release_channel_preference)?;
+        if !channel.is_empty() {
+            version = format!("{} {}", version, channel);
+        }
+        Ok(version.into())
+    }
+}
+
 pub fn create_env_impl(
     params: WebView2EnvironmentParams,
     handler: &ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler,
@@ -88,158 +117,6 @@ pub fn create_env_impl(
         params.environment_options,
         handler,
     )
-}
-
-fn ptr_to_pathbuf(ptr: CowPCWSTR) -> Option<PathBuf> {
-    match ptr {
-        CowPCWSTR::Pointer(ptr) => {
-            if ptr.is_null() {
-                None
-            } else {
-                Some(PathBuf::from(OsString::from_wide(unsafe { ptr.as_wide() })))
-            }
-        }
-        CowPCWSTR::Owned(s) => Some(PathBuf::from(s.to_os_string())),
-    }
-}
-
-fn find_installed_client_dll(
-    preference: WebView2ReleaseChannelPreference,
-) -> Result<(PathBuf, String, &'static str)> {
-    for i in 0..NUM_CHANNELS {
-        let channel = if preference == WebView2ReleaseChannelPreference::Canary {
-            4 - i
-        } else {
-            i
-        };
-        let sub_key = format!("{}{}", INSTALL_KEY_PATH, CHANNEL_UUID[channel]);
-        if let Some((path, version)) = find_installed_client_dll_for_channel(&sub_key, false) {
-            return Ok((path, version, CHANNEL_NAME[channel]));
-        }
-        if let Some((path, version)) = find_installed_client_dll_for_channel(&sub_key, true) {
-            return Ok((path, version, CHANNEL_NAME[channel]));
-        }
-
-        struct DepId(PWSTR);
-
-        impl Drop for DepId {
-            fn drop(&mut self) {
-                unsafe {
-                    if let Ok(heap) = GetProcessHeap() {
-                        HeapFree(heap, HEAP_FLAGS(0), Some(self.0.0.cast())).ok();
-                    }
-                }
-            }
-        }
-
-        unsafe {
-            if let Ok(dep) = TryCreatePackageDependency(
-                PSID::default(),
-                CHANNEL_PACKAGE_NAME[channel],
-                PACKAGE_VERSION::default(),
-                PackageDependencyProcessorArchitectures_None,
-                PackageDependencyLifetimeKind_Process,
-                None,
-                CreatePackageDependencyOptions_None,
-            )
-            .map(DepId)
-            {
-                let mut ctx = PACKAGEDEPENDENCY_CONTEXT::default();
-                AddPackageDependency(dep.0, 0, AddPackageDependencyOptions_None, &mut ctx, None)
-                    .ok();
-            }
-        }
-
-        let mut len = 0;
-        let mut packages = 0;
-        let flags = 0x180001;
-        if unsafe { GetCurrentPackageInfo(flags, &mut len, None, Some(&mut packages)) }
-            != ERROR_INSUFFICIENT_BUFFER
-        {
-            continue;
-        }
-        let mut buffer = Vec::<PACKAGE_INFO>::with_capacity(packages as usize);
-        if unsafe {
-            GetCurrentPackageInfo(
-                flags,
-                &mut len,
-                Some(buffer.as_mut_ptr().cast()),
-                Some(&mut packages),
-            )
-        }
-        .is_err()
-        {
-            continue;
-        }
-        unsafe { buffer.set_len(packages as usize) };
-        let Some(package) = buffer.iter().find(|package| unsafe {
-            let package_family_name =
-                std::ptr::addr_of!(package.packageFamilyName).read_unaligned();
-            &package_family_name.to_hstring() == CHANNEL_PACKAGE_NAME[channel]
-        }) else {
-            continue;
-        };
-        let package_id = unsafe { std::ptr::addr_of!(package.packageId).read_unaligned() };
-        let version = unsafe {
-            [
-                package_id.version.Anonymous.Anonymous.Major,
-                package_id.version.Anonymous.Anonymous.Minor,
-                package_id.version.Anonymous.Anonymous.Build,
-                package_id.version.Anonymous.Anonymous.Revision,
-            ]
-        };
-        let path = unsafe {
-            std::ptr::addr_of!(package.path)
-                .read_unaligned()
-                .to_hstring()
-        };
-        let path = PathBuf::from(path.to_os_string());
-        if let Some(path) = check_version_and_find_dll(version, path) {
-            let version = format!(
-                "{}.{}.{}.{}",
-                version[0], version[1], version[2], version[3]
-            );
-            return Ok((path, version, CHANNEL_NAME[channel]));
-        }
-    }
-    Err(ERROR_FILE_NOT_FOUND.into())
-}
-
-fn find_installed_client_dll_for_channel(sub_key: &str, system: bool) -> Option<(PathBuf, String)> {
-    let key = if system {
-        windows_registry::LOCAL_MACHINE
-    } else {
-        windows_registry::CURRENT_USER
-    }
-    .options()
-    .read()
-    .access(KEY_WOW64_32KEY.0)
-    .open(sub_key)
-    .ok()?;
-    let path = key.get_hstring("EBWebView").ok()?;
-    let path = PathBuf::from(path.to_os_string());
-    let version_str = path.file_name()?.to_string_lossy().into_owned();
-    let version = parse_version(&version_str)?;
-    let path = check_version_and_find_dll(version, path)?;
-    Some((path, version_str))
-}
-
-pub fn parse_version(s: &str) -> Option<[u16; 4]> {
-    let mut parts = s.split('.').map(str::parse::<u16>);
-    Some([
-        parts.next()?.ok()?,
-        parts.next()?.ok()?,
-        parts.next()?.ok()?,
-        parts.next()?.ok()?,
-    ])
-}
-
-fn check_version_and_find_dll(version: [u16; 4], path: PathBuf) -> Option<PathBuf> {
-    if version >= MIN_COMPATIBLE_VER {
-        find_client_dll_in_folder(path).ok()
-    } else {
-        None
-    }
 }
 
 type CreateWebViewEnvironmentWithOptionsInternalFn = Option<
@@ -296,6 +173,150 @@ fn create_env_with_client_dll(
     }
 }
 
+fn find_installed_client_dll(
+    preference: WebView2ReleaseChannelPreference,
+) -> Result<(PathBuf, String, &'static str)> {
+    for i in 0..NUM_CHANNELS {
+        let channel = if preference == WebView2ReleaseChannelPreference::Canary {
+            4 - i
+        } else {
+            i
+        };
+        let sub_key = format!("{}{}", INSTALL_KEY_PATH, CHANNEL_UUID[channel]);
+        if let Some((path, version)) = find_installed_client_dll_for_channel(&sub_key, false) {
+            return Ok((path, version, CHANNEL_NAME[channel]));
+        }
+        if let Some((path, version)) = find_installed_client_dll_for_channel(&sub_key, true) {
+            return Ok((path, version, CHANNEL_NAME[channel]));
+        }
+
+        add_package_dependency(CHANNEL_PACKAGE_NAME[channel]);
+
+        if let Some((path, version)) = search_package_info(CHANNEL_PACKAGE_NAME[channel]) {
+            let version = format!(
+                "{}.{}.{}.{}",
+                version[0], version[1], version[2], version[3]
+            );
+            return Ok((path, version, CHANNEL_NAME[channel]));
+        }
+    }
+    Err(ERROR_FILE_NOT_FOUND.into())
+}
+
+fn find_installed_client_dll_for_channel(sub_key: &str, system: bool) -> Option<(PathBuf, String)> {
+    let key = if system {
+        windows_registry::LOCAL_MACHINE
+    } else {
+        windows_registry::CURRENT_USER
+    }
+    .options()
+    .read()
+    .access(KEY_WOW64_32KEY.0)
+    .open(sub_key)
+    .ok()?;
+    let path = key.get_hstring("EBWebView").ok()?;
+    let path = PathBuf::from(path.to_os_string());
+    let version_str = path.file_name()?.to_string_lossy().into_owned();
+    let version = parse_version(&version_str)?;
+    let path = check_version_and_find_dll(version, path)?;
+    Some((path, version_str))
+}
+
+#[inline]
+fn add_package_dependency(package_name: &HSTRING) {
+    struct DepId(PWSTR);
+
+    impl Drop for DepId {
+        fn drop(&mut self) {
+            unsafe {
+                if let Ok(heap) = GetProcessHeap() {
+                    HeapFree(heap, HEAP_FLAGS(0), Some(self.0.0.cast())).ok();
+                }
+            }
+        }
+    }
+
+    unsafe {
+        if let Ok(dep) = TryCreatePackageDependency(
+            PSID::default(),
+            package_name,
+            PACKAGE_VERSION::default(),
+            PackageDependencyProcessorArchitectures_None,
+            PackageDependencyLifetimeKind_Process,
+            None,
+            CreatePackageDependencyOptions_None,
+        )
+        .map(DepId)
+        {
+            let mut ctx = PACKAGEDEPENDENCY_CONTEXT::default();
+            AddPackageDependency(dep.0, 0, AddPackageDependencyOptions_None, &mut ctx, None).ok();
+        }
+    }
+}
+
+#[inline]
+fn search_package_info(package_name: &HSTRING) -> Option<(PathBuf, [u16; 4])> {
+    let mut len = 0;
+    let mut packages = 0;
+    let flags = 0x180001;
+    if unsafe { GetCurrentPackageInfo(flags, &mut len, None, Some(&mut packages)) }
+        != ERROR_INSUFFICIENT_BUFFER
+    {
+        return None;
+    }
+    let mut buffer = Vec::<PACKAGE_INFO>::with_capacity(packages as usize);
+    unsafe {
+        GetCurrentPackageInfo(
+            flags,
+            &mut len,
+            Some(buffer.as_mut_ptr().cast()),
+            Some(&mut packages),
+        )
+    }
+    .ok()
+    .ok()?;
+    unsafe { buffer.set_len(packages as usize) };
+    let package = buffer.iter().find(|package| unsafe {
+        let package_family_name = std::ptr::addr_of!(package.packageFamilyName).read_unaligned();
+        &package_family_name.to_hstring() == package_name
+    })?;
+    let package_id = unsafe { std::ptr::addr_of!(package.packageId).read_unaligned() };
+    let version = unsafe {
+        [
+            package_id.version.Anonymous.Anonymous.Major,
+            package_id.version.Anonymous.Anonymous.Minor,
+            package_id.version.Anonymous.Anonymous.Build,
+            package_id.version.Anonymous.Anonymous.Revision,
+        ]
+    };
+    let path = unsafe {
+        std::ptr::addr_of!(package.path)
+            .read_unaligned()
+            .to_hstring()
+    };
+    let path = PathBuf::from(path.to_os_string());
+    let path = check_version_and_find_dll(version, path)?;
+    Some((path, version))
+}
+
+pub fn parse_version(s: &str) -> Option<[u16; 4]> {
+    let mut parts = s.split('.').map(str::parse::<u16>);
+    Some([
+        parts.next()?.ok()?,
+        parts.next()?.ok()?,
+        parts.next()?.ok()?,
+        parts.next()?.ok()?,
+    ])
+}
+
+fn check_version_and_find_dll(version: [u16; 4], path: PathBuf) -> Option<PathBuf> {
+    if version >= MIN_COMPATIBLE_VER {
+        find_client_dll_in_folder(path).ok()
+    } else {
+        None
+    }
+}
+
 fn find_embedded_client_dll(sub_folder: PathBuf) -> Result<PathBuf> {
     let path = if sub_folder.is_absolute() {
         sub_folder
@@ -314,22 +335,6 @@ fn find_client_dll_in_folder(folder: PathBuf) -> Result<PathBuf> {
         Ok(path)
     } else {
         Err(ERROR_FILE_NOT_FOUND.into())
-    }
-}
-
-pub fn get_version_string(params: WebView2EnvironmentParams) -> Result<HSTRING> {
-    if let Some(sub_folder) = ptr_to_pathbuf(params.embedded_edge_sub_folder)
-        && !sub_folder.as_os_str().is_empty()
-    {
-        let path = find_embedded_client_dll(sub_folder)?;
-        find_embedded_version(&path)
-    } else {
-        let (_, mut version, channel) =
-            find_installed_client_dll(params.release_channel_preference)?;
-        if !channel.is_empty() {
-            version = format!("{} {}", version, channel);
-        }
-        Ok(version.into())
     }
 }
 

@@ -13,14 +13,15 @@ use windows::Win32::{
     Storage::{
         FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW},
         Packaging::Appx::{
-            AddPackageDependency, AddPackageDependencyOptions_None,
-            CreatePackageDependencyOptions_None, GetCurrentPackageInfo, PACKAGE_INFO,
-            PACKAGE_VERSION, PACKAGEDEPENDENCY_CONTEXT, PackageDependencyLifetimeKind_Process,
-            PackageDependencyProcessorArchitectures_None, TryCreatePackageDependency,
+            AddPackageDependencyOptions, AddPackageDependencyOptions_None,
+            CreatePackageDependencyOptions, CreatePackageDependencyOptions_None,
+            GetCurrentPackageInfo, PACKAGE_INFO, PACKAGE_VERSION, PACKAGEDEPENDENCY_CONTEXT,
+            PackageDependencyLifetimeKind, PackageDependencyLifetimeKind_Process,
+            PackageDependencyProcessorArchitectures, PackageDependencyProcessorArchitectures_None,
         },
     },
     System::{
-        LibraryLoader::{GetProcAddress, LoadLibraryW},
+        LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW},
         Memory::{GetProcessHeap, HEAP_FLAGS, HeapFree},
         Registry::KEY_WOW64_32KEY,
     },
@@ -216,7 +217,7 @@ fn find_installed_client_dll_for_channel(sub_key: &str, system: bool) -> Option<
 }
 
 #[inline]
-fn add_package_dependency(package_name: &HSTRING) {
+fn add_package_dependency(package_name: &HSTRING) -> Option<()> {
     struct DepId(PWSTR);
 
     impl Drop for DepId {
@@ -230,21 +231,64 @@ fn add_package_dependency(package_name: &HSTRING) {
     }
 
     unsafe {
-        if let Ok(dep) = TryCreatePackageDependency(
+        let lib = GetModuleHandleW(w!("kernelbase.dll")).ok()?;
+
+        let try_create_package_dependency =
+            std::mem::transmute::<
+                FARPROC,
+                Option<
+                    unsafe extern "system" fn(
+                        PSID,
+                        PCWSTR,
+                        PACKAGE_VERSION,
+                        PackageDependencyProcessorArchitectures,
+                        PackageDependencyLifetimeKind,
+                        PCWSTR,
+                        CreatePackageDependencyOptions,
+                        *mut PWSTR,
+                    ) -> HRESULT,
+                >,
+            >(GetProcAddress(lib, s!("TryCreatePackageDependency")))?;
+
+        let add_package_dependency = std::mem::transmute::<
+            FARPROC,
+            Option<
+                unsafe extern "system" fn(
+                    PWSTR,
+                    u32,
+                    AddPackageDependencyOptions,
+                    *mut PACKAGEDEPENDENCY_CONTEXT,
+                    *mut PWSTR,
+                ) -> HRESULT,
+            >,
+        >(GetProcAddress(lib, s!("AddPackageDependency")))?;
+
+        let mut dep_id = PWSTR::default();
+        try_create_package_dependency(
             PSID::default(),
-            package_name,
+            PCWSTR(package_name.as_ptr()),
             PACKAGE_VERSION::default(),
             PackageDependencyProcessorArchitectures_None,
             PackageDependencyLifetimeKind_Process,
-            None,
+            PCWSTR::default(),
             CreatePackageDependencyOptions_None,
+            &mut dep_id,
         )
-        .map(DepId)
-        {
-            let mut ctx = PACKAGEDEPENDENCY_CONTEXT::default();
-            AddPackageDependency(dep.0, 0, AddPackageDependencyOptions_None, &mut ctx, None).ok();
-        }
+        .ok()
+        .ok()?;
+        let dep = DepId(dep_id);
+        let mut ctx = PACKAGEDEPENDENCY_CONTEXT::default();
+        add_package_dependency(
+            dep.0,
+            0,
+            AddPackageDependencyOptions_None,
+            &mut ctx,
+            null_mut(),
+        )
+        .ok()
+        .ok()?;
     }
+    Some(())
 }
 
 #[inline]

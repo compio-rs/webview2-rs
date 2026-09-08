@@ -9,19 +9,11 @@ fn main() -> Result<(), &'static str> {
     }
 
     println!("Generating WebView2 bindings...");
-    windows_bindgen::bindgen(["--etc", "bindgen/src/webview2.txt"]).unwrap();
+    windows_bindgen::bindgen(["--etc", "bindgen/src/webview2.txt"]);
 
-    println!("Patching link commands...");
-    patch_link();
+    println!("Generating internal bindings...");
+    windows_bindgen::bindgen(["--etc", "bindgen/src/internal.txt"]);
 
     println!("Done.");
     Ok(())
-}
-
-fn patch_link() {
-    const BINDINGS_MOD: &str = "webview2/src/bindings.rs";
-
-    let contents = fs::read_to_string(BINDINGS_MOD).expect("failed to read bindings.rs");
-    let contents = contents.replace(r#"windows_link::link!"#, r#"crate::link!"#);
-    fs::write(BINDINGS_MOD, &contents).expect("failed to write bindings.rs");
 }

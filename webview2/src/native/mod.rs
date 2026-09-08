@@ -4,13 +4,11 @@
 
 #![allow(non_snake_case, clippy::missing_safety_doc)]
 
-use windows::Win32::{
-    Foundation::{E_INVALIDARG, E_POINTER},
-    System::Com::CoTaskMemAlloc,
+use crate::{
+    internal::{CoTaskMemAlloc, E_INVALIDARG, E_POINTER},
+    *,
 };
 use windows_core::{Error, HSTRING, PCWSTR, PWSTR, Param, Result};
-
-use crate::*;
 
 mod load;
 mod r#override;
@@ -101,15 +99,36 @@ pub unsafe fn GetAvailableCoreWebView2BrowserVersionString<P0>(
 where
     P0: Param<PCWSTR>,
 {
+    unsafe {
+        GetAvailableCoreWebView2BrowserVersionStringWithOptions(
+            browser_executable_folder,
+            None,
+            version_info,
+        )
+    }
+}
+
+pub unsafe fn GetAvailableCoreWebView2BrowserVersionStringWithOptions<P0, P1>(
+    browser_executable_folder: P0,
+    options: P1,
+    version_info: *mut windows_core::PWSTR,
+) -> Result<()>
+where
+    P0: windows_core::Param<windows_core::PCWSTR>,
+    P1: windows_core::Param<ICoreWebView2EnvironmentOptions>,
+{
     if version_info.is_null() || !version_info.is_aligned() {
         return Err(Error::from_hresult(E_POINTER));
     }
 
     unsafe {
+        let options = options.param();
+        let options = options.borrow();
+
         let mut params = WebView2EnvironmentParams {
             embedded_edge_sub_folder: browser_executable_folder.param().abi().into(),
             user_data_dir: CowPCWSTR::Pointer(PCWSTR::null()),
-            environment_options: None,
+            environment_options: options.as_ref(),
             release_channel_preference: WebView2ReleaseChannelPreference::Stable,
         };
         r#override::update(&mut params);

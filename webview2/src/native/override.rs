@@ -1,10 +1,9 @@
 use std::env::current_exe;
 
-use windows::Win32::{
-    Foundation::ERROR_INSUFFICIENT_BUFFER,
-    Storage::Packaging::Appx::GetCurrentApplicationUserModelId, System::Registry::KEY_QUERY_VALUE,
+use crate::internal::{
+    ERROR_INSUFFICIENT_BUFFER, GetCurrentApplicationUserModelId, KEY_QUERY_VALUE,
 };
-use windows_core::{HStringBuilder, PWSTR};
+use windows_core::{HStringBuilder, PWSTR, WIN32_ERROR};
 use windows_registry::{CURRENT_USER, Key, LOCAL_MACHINE, Value};
 
 use super::*;
@@ -111,11 +110,7 @@ fn read_override(key: &str, root: &Key, value: &str, redist: bool) -> Option<Val
         EMBEDDED_OVERRIDE_KEY
     };
 
-    let phk = root
-        .options()
-        .access(KEY_QUERY_VALUE.0)
-        .open(sub_key)
-        .ok()?;
+    let phk = root.options().access(KEY_QUERY_VALUE).open(sub_key).ok()?;
 
     phk.get_value(value).ok()
 }
@@ -133,9 +128,9 @@ fn app_user_model_id() -> Option<HSTRING> {
     let res = unsafe { GetCurrentApplicationUserModelId(&mut len, None) };
     if res == ERROR_INSUFFICIENT_BUFFER {
         let mut buffer = HStringBuilder::new(len as usize);
-        unsafe { GetCurrentApplicationUserModelId(&mut len, Some(PWSTR(buffer.as_mut_ptr()))) }
-            .ok()
-            .ok()?;
+        let res =
+            unsafe { GetCurrentApplicationUserModelId(&mut len, Some(PWSTR(buffer.as_mut_ptr()))) };
+        WIN32_ERROR(res).ok().ok()?;
         buffer.trim_end();
         return Some(buffer.into());
     }

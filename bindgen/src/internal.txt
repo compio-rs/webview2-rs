@@ -1,0 +1,42 @@
+--in
+    default
+    bindgen/winmd/Windows.Win32.winmd
+
+--out webview2/src/internal.rs
+--implement
+--flat
+
+--filter
+    Windows.Win32.Foundation.E_FAIL
+    Windows.Win32.Foundation.E_INVALIDARG
+    Windows.Win32.Foundation.E_POINTER
+    Windows.Win32.Foundation.ERROR_FILE_NOT_FOUND
+    Windows.Win32.Foundation.ERROR_INSUFFICIENT_BUFFER
+    Windows.Win32.Foundation.FreeLibrary
+
+    Windows.Win32.Security.PSID
+
+    Windows.Win32.Storage.FileSystem.GetFileVersionInfoSizeW
+    Windows.Win32.Storage.FileSystem.GetFileVersionInfoW
+    Windows.Win32.Storage.FileSystem.VerQueryValueW
+
+    Windows.Win32.Storage.Packaging.Appx.PACKAGE_INFO
+    Windows.Win32.Storage.Packaging.Appx.PACKAGE_VERSION
+    Windows.Win32.Storage.Packaging.Appx.PACKAGEDEPENDENCY_CONTEXT
+    Windows.Win32.Storage.Packaging.Appx.AddPackageDependencyOptions
+    Windows.Win32.Storage.Packaging.Appx.CreatePackageDependencyOptions
+    Windows.Win32.Storage.Packaging.Appx.GetCurrentApplicationUserModelId
+    Windows.Win32.Storage.Packaging.Appx.GetCurrentPackageInfo
+    Windows.Win32.Storage.Packaging.Appx.PackageDependencyLifetimeKind
+    Windows.Win32.Storage.Packaging.Appx.PackageDependencyProcessorArchitectures
+
+    Windows.Win32.System.Com.CoTaskMemAlloc
+
+    Windows.Win32.System.LibraryLoader.GetModuleHandleW
+    Windows.Win32.System.LibraryLoader.GetProcAddress
+    Windows.Win32.System.LibraryLoader.LoadLibraryW
+
+    Windows.Win32.System.Memory.GetProcessHeap
+    Windows.Win32.System.Memory.HeapFree
+
+    Windows.Win32.System.Registry.KEY_QUERY_VALUE

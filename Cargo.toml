@@ -4,8 +4,7 @@ members = ["bindgen", "webview2"]
 default-members = ["webview2"]
 
 [workspace.dependencies]
-windows = "0.62.0"
-windows-bindgen = "0.66.0"
-windows-core = "0.62.0"
-windows-registry = "0.6.1"
+windows-bindgen = { version = "0.100", package = "overrides-windows-bindgen" }
+windows-core = "0.100"
+windows-registry = "0.100"
 webview2 = { path = "webview2", package = "winio-webview2" }

@@ -7,26 +7,16 @@ use std::{
 };
 
 use super::*;
-use windows::Win32::{
-    Foundation::{E_FAIL, ERROR_FILE_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER, FARPROC, FreeLibrary},
-    Security::PSID,
-    Storage::{
-        FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW},
-        Packaging::Appx::{
-            AddPackageDependencyOptions, AddPackageDependencyOptions_None,
-            CreatePackageDependencyOptions, CreatePackageDependencyOptions_None,
-            GetCurrentPackageInfo, PACKAGE_INFO, PACKAGE_VERSION, PACKAGEDEPENDENCY_CONTEXT,
-            PackageDependencyLifetimeKind, PackageDependencyLifetimeKind_Process,
-            PackageDependencyProcessorArchitectures, PackageDependencyProcessorArchitectures_None,
-        },
-    },
-    System::{
-        LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW},
-        Memory::{GetProcessHeap, HEAP_FLAGS, HeapFree},
-        Registry::KEY_WOW64_32KEY,
-    },
+use crate::internal::{
+    AddPackageDependencyOptions, AddPackageDependencyOptions_None, CreatePackageDependencyOptions,
+    CreatePackageDependencyOptions_None, E_FAIL, ERROR_FILE_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER,
+    FARPROC, FreeLibrary, GetCurrentPackageInfo, GetFileVersionInfoSizeW, GetFileVersionInfoW,
+    GetModuleHandleW, GetProcAddress, GetProcessHeap, HeapFree, LoadLibraryW, PACKAGE_INFO,
+    PACKAGE_VERSION, PACKAGEDEPENDENCY_CONTEXT, PSID, PackageDependencyLifetimeKind,
+    PackageDependencyLifetimeKind_Process, PackageDependencyProcessorArchitectures,
+    PackageDependencyProcessorArchitectures_None, VerQueryValueW,
 };
-use windows_core::{Error, HRESULT, HSTRING, PCWSTR, PWSTR, Param, Result, h, s, w};
+use windows_core::{Error, HRESULT, HSTRING, PCWSTR, PWSTR, Param, Result, WIN32_ERROR, h, s, w};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
@@ -130,7 +120,10 @@ fn create_env_with_client_dll(
     handler: &ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler,
 ) -> Result<()> {
     unsafe {
-        let client_dll = LoadLibraryW(&path)?;
+        let client_dll = LoadLibraryW(&path);
+        if client_dll.0.is_null() {
+            return Err(Error::from_thread());
+        }
         let Some(create_proc) = std::mem::transmute::<
             FARPROC,
             CreateWebViewEnvironmentWithOptionsInternalFn,
@@ -156,7 +149,7 @@ fn create_env_with_client_dll(
         if let Some(can_unload) = can_unload_proc
             && can_unload().is_ok()
         {
-            FreeLibrary(client_dll).ok();
+            let _ = FreeLibrary(client_dll);
         }
 
         hr.ok()
@@ -194,7 +187,7 @@ fn find_installed_client_dll(
             return Ok((path, version, CHANNEL_NAME[channel]));
         }
     }
-    Err(ERROR_FILE_NOT_FOUND.into())
+    Err(WIN32_ERROR(ERROR_FILE_NOT_FOUND).to_hresult().into())
 }
 
 fn find_installed_client_dll_for_channel(sub_key: &str, system: bool) -> Option<(PathBuf, String)> {
@@ -205,7 +198,7 @@ fn find_installed_client_dll_for_channel(sub_key: &str, system: bool) -> Option<
     }
     .options()
     .read()
-    .access(KEY_WOW64_32KEY.0)
+    .wow64_32()
     .open(sub_key)
     .ok()?;
     let path = key.get_hstring("EBWebView").ok()?;
@@ -223,15 +216,16 @@ fn add_package_dependency(package_name: &HSTRING) -> Option<()> {
     impl Drop for DepId {
         fn drop(&mut self) {
             unsafe {
-                if let Ok(heap) = GetProcessHeap() {
-                    HeapFree(heap, HEAP_FLAGS(0), Some(self.0.0.cast())).ok();
-                }
+                let _ = HeapFree(GetProcessHeap(), 0, Some(self.0.0.cast()));
             }
         }
     }
 
     unsafe {
-        let lib = GetModuleHandleW(w!("kernelbase.dll")).ok()?;
+        let lib = GetModuleHandleW(w!("kernelbase.dll"));
+        if lib.0.is_null() {
+            return None;
+        }
 
         let try_create_package_dependency =
             std::mem::transmute::<
@@ -302,16 +296,15 @@ fn search_package_info(package_name: &HSTRING) -> Option<(PathBuf, [u16; 4])> {
         return None;
     }
     let mut buffer = Vec::<PACKAGE_INFO>::with_capacity(packages as usize);
-    unsafe {
+    let res = unsafe {
         GetCurrentPackageInfo(
             flags,
             &mut len,
             Some(buffer.as_mut_ptr().cast()),
             Some(&mut packages),
         )
-    }
-    .ok()
-    .ok()?;
+    };
+    WIN32_ERROR(res).ok().ok()?;
     unsafe { buffer.set_len(packages as usize) };
     let package = buffer.iter().find(|package| unsafe {
         let package_family_name = std::ptr::addr_of!(package.packageFamilyName).read_unaligned();
@@ -380,7 +373,7 @@ fn find_client_dll_in_folder(folder: PathBuf) -> Result<PathBuf> {
     if path.exists() {
         Ok(path)
     } else {
-        Err(ERROR_FILE_NOT_FOUND.into())
+        Err(WIN32_ERROR(ERROR_FILE_NOT_FOUND).to_hresult().into())
     }
 }
 
@@ -393,7 +386,7 @@ fn find_embedded_version(path: &Path) -> Result<HSTRING> {
     }
 
     let mut buffer = vec![0u8; verinfo as usize];
-    unsafe { GetFileVersionInfoW(&path, Some(handle), verinfo, buffer.as_mut_ptr().cast())? };
+    unsafe { GetFileVersionInfoW(&path, Some(handle), verinfo, buffer.as_mut_ptr().cast()).ok()? };
     let mut lpbuffer = null_mut();
     let mut pulen = 0;
     unsafe {

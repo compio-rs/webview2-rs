@@ -7,6 +7,6 @@
   "msbuild-sdks": {
     "Microsoft.Build.NoTargets": "3.7.134",
     "Microsoft.Build.Traversal": "4.1.82",
-    "Microsoft.Windows.WinmdGenerator": "0.70.11-preview"
+    "Microsoft.Windows.WinmdGenerator": "0.70.11-preview-g674b9f0b77"
   }
 }
